@@ -77,7 +77,7 @@ export default function HomeClient() {
   const [step, setStep] = useState(0);
   const [status, setStatus] = useState<keyof typeof statusLabels>("safe");
   const [contacts, setContacts] = useState<EmergencyContact[]>([]);
-  const [selectedContactId, setSelectedContactId] = useState("");
+  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [contactTypes, setContactTypes] = useState<IncidentKey[]>([]);
@@ -105,7 +105,7 @@ export default function HomeClient() {
               : (Object.keys(incidents) as IncidentKey[]),
         }));
         setContacts(migrated);
-        setSelectedContactId(migrated[0]?.id ?? "");
+        setSelectedContactIds(migrated.map((contact) => contact.id));
         window.localStorage.setItem("homesafe-contacts", JSON.stringify(migrated));
       } catch {
         window.localStorage.removeItem("homesafe-contacts");
@@ -120,7 +120,7 @@ export default function HomeClient() {
           incidentTypes: Object.keys(incidents) as IncidentKey[],
         }];
         setContacts(migrated);
-        setSelectedContactId(migrated[0].id);
+        setSelectedContactIds([migrated[0].id]);
         window.localStorage.setItem("homesafe-contacts", JSON.stringify(migrated));
         window.localStorage.removeItem("homesafe-contact");
       }
@@ -185,15 +185,17 @@ export default function HomeClient() {
     const matchingContacts = messageIncident
       ? contacts.filter((contact) => contact.incidentTypes.includes(messageIncident))
       : contacts;
-    const selectedContact =
-      matchingContacts.find((contact) => contact.id === selectedContactId) ??
-      matchingContacts[0];
-    if (!selectedContact) {
+    const selectedContacts = matchingContacts.filter((contact) =>
+      selectedContactIds.includes(contact.id)
+    );
+    if (!selectedContacts.length) {
       setScreen("contacts");
       return;
     }
-    const recipient = selectedContact.phone.replace(/[^\d+]/g, "");
-    window.location.href = `sms:${recipient}?body=${encodeURIComponent(message)}`;
+    const recipients = selectedContacts
+      .map((contact) => contact.phone.replace(/[^\d+]/g, ""))
+      .join(",");
+    window.location.href = `sms:${recipients}?body=${encodeURIComponent(message)}`;
   };
 
   const saveContact = () => {
@@ -202,7 +204,7 @@ export default function HomeClient() {
     if (!name || !phone || !contactTypes.length) return;
     const next = [...contacts, { id: crypto.randomUUID(), name, phone, incidentTypes: contactTypes }];
     setContacts(next);
-    setSelectedContactId((current) => current || next[0].id);
+    setSelectedContactIds((current) => [...current, next[next.length - 1].id]);
     window.localStorage.setItem("homesafe-contacts", JSON.stringify(next));
     setContactName("");
     setContactPhone("");
@@ -212,7 +214,7 @@ export default function HomeClient() {
   const removeContact = (id: string) => {
     const next = contacts.filter((contact) => contact.id !== id);
     setContacts(next);
-    if (selectedContactId === id) setSelectedContactId(next[0]?.id ?? "");
+    setSelectedContactIds((current) => current.filter((contactId) => contactId !== id));
     window.localStorage.setItem("homesafe-contacts", JSON.stringify(next));
   };
 
@@ -224,14 +226,29 @@ export default function HomeClient() {
     );
   };
 
+  const openMessage = (incidentType: IncidentKey | null) => {
+    const eligible = incidentType
+      ? contacts.filter((contact) => contact.incidentTypes.includes(incidentType))
+      : contacts;
+    setMessageIncident(incidentType);
+    setSelectedContactIds(eligible.map((contact) => contact.id));
+    setScreen("message");
+  };
+
+  const toggleSelectedContact = (id: string) => {
+    setSelectedContactIds((current) =>
+      current.includes(id)
+        ? current.filter((contactId) => contactId !== id)
+        : [...current, id]
+    );
+  };
+
   const matchingContacts = messageIncident
     ? contacts.filter((contact) => contact.incidentTypes.includes(messageIncident))
     : contacts;
-  const activeSelectedContactId = matchingContacts.some(
-    (contact) => contact.id === selectedContactId
-  )
-    ? selectedContactId
-    : (matchingContacts[0]?.id ?? "");
+  const selectedMatchingContacts = matchingContacts.filter((contact) =>
+    selectedContactIds.includes(contact.id)
+  );
 
   const copyMessage = async () => {
     await navigator.clipboard.writeText(message);
@@ -267,7 +284,7 @@ export default function HomeClient() {
           </button>
 
           <div className="quick-grid">
-            <button onClick={() => { setMessageIncident(null); setScreen("message"); }}>
+            <button onClick={() => openMessage(null)}>
               <span className="quick-icon">↗</span>
               <b>Send a check-in</b>
               <small>Prepare SMS</small>
@@ -328,7 +345,7 @@ export default function HomeClient() {
             {step < incidents[incident].steps.length - 1 ? (
               <button className="primary" onClick={() => setStep(step + 1)}>Done — show next step</button>
             ) : (
-              <button className="primary" onClick={() => { setMessageIncident(incident); setScreen("message"); }}>Check in with my contacts</button>
+              <button className="primary" onClick={() => openMessage(incident)}>Check in with my contacts</button>
             )}
             {step > 0 && <button className="text-button" onClick={() => setStep(step - 1)}>Previous step</button>}
           </div>
@@ -356,17 +373,20 @@ export default function HomeClient() {
           </div>
           <div className="saved-recipients">
             <span className="section-label">Send to saved contact</span>
+            {matchingContacts.length > 1 && (
+              <p className="selection-note">All matching contacts are selected automatically. Tap one to exclude it.</p>
+            )}
             {matchingContacts.length ? (
               <div className="contact-picker">
                 {matchingContacts.map((contact) => (
                   <button
                     key={contact.id}
-                    className={activeSelectedContactId === contact.id ? "selected" : ""}
-                    onClick={() => setSelectedContactId(contact.id)}
+                    className={selectedContactIds.includes(contact.id) ? "selected" : ""}
+                    onClick={() => toggleSelectedContact(contact.id)}
                   >
                     <i>{contact.name.slice(0, 1).toUpperCase()}</i>
                     <span><b>{contact.name}</b><small>{contact.phone}</small></span>
-                    <em>{activeSelectedContactId === contact.id ? "Selected" : "Choose"}</em>
+                    <em>{selectedContactIds.includes(contact.id) ? "Selected ✓" : "Add"}</em>
                   </button>
                 ))}
               </div>
@@ -399,8 +419,16 @@ export default function HomeClient() {
             <span>Message preview</span>
             <p>{message}</p>
           </div>
-          <button className="primary" onClick={openSms}>
-            {matchingContacts.length ? "Open in Messages" : "Add a matching contact first"}
+          <button
+            className="primary"
+            onClick={openSms}
+            disabled={matchingContacts.length > 0 && selectedMatchingContacts.length === 0}
+          >
+            {selectedMatchingContacts.length
+              ? `Message ${selectedMatchingContacts.length} contact${selectedMatchingContacts.length === 1 ? "" : "s"}`
+              : matchingContacts.length
+                ? "Select at least one contact"
+                : "Add a matching contact first"}
           </button>
           <button className="secondary" onClick={copyMessage}>{copied ? "Copied" : "Copy message instead"}</button>
           <p className="safety-note">Your messaging app will open. Review the recipient and message, then tap Send.</p>

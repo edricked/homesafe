@@ -129,6 +129,7 @@ h2 { font-size: 44px; }
 .field input:focus { border-color: var(--green); box-shadow: 0 0 0 3px rgba(31,90,78,.1); }
 .section-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .09em; font-weight: 900; color: #63736d; margin-bottom: 9px; }
 .saved-recipients { margin: 24px 0 14px; }
+.selection-note { color: var(--muted); font-size: 10px; line-height: 1.45; margin: -2px 0 9px; }
 .contact-picker { display: grid; gap: 8px; }
 .contact-picker button { width: 100%; min-height: 67px; display: flex; align-items: center; gap: 11px; border: 1px solid var(--line); border-radius: 14px; background: rgba(255,255,255,.55); padding: 10px 12px; text-align: left; cursor: pointer; }
 .contact-picker button.selected { border-color: var(--green); background: #edf4ef; box-shadow: 0 0 0 2px rgba(31,90,78,.08); }
@@ -146,6 +147,7 @@ h2 { font-size: 44px; }
 .message-preview > span { color: rgba(255,255,255,.58); }
 .message-preview p { font-size: 13px; line-height: 1.6; margin: 0; word-break: break-word; }
 .message-sheet .secondary { margin-top: 8px; }
+.message-sheet .primary:disabled { opacity: .45; cursor: not-allowed; }
 
 .plan-card { border-radius: 19px; padding: 19px; margin: 24px 0 14px; }
 .plan-card.highlight { background: var(--green); color: white; }
