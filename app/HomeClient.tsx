@@ -1,0 +1,485 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+
+type IncidentKey = "fire" | "water" | "outage" | "evacuation";
+type Screen = "home" | "choose" | "guide" | "message" | "plan" | "contacts";
+type EmergencyContact = {
+  id: string;
+  name: string;
+  phone: string;
+  incidentTypes: IncidentKey[];
+};
+
+const incidents: Record<
+  IncidentKey,
+  { label: string; eyebrow: string; tone: string; steps: string[] }
+> = {
+  fire: {
+    label: "Fire or smoke",
+    eyebrow: "Leave immediately",
+    tone: "red",
+    steps: [
+      "Get everyone outside. Do not stop to collect belongings.",
+      "Use stairs, not lifts. Stay low if there is smoke.",
+      "Go to your outdoor meeting point.",
+      "Call your local emergency number from a safe place.",
+      "Do not go back inside until authorities say it is safe.",
+    ],
+  },
+  water: {
+    label: "Water leak",
+    eyebrow: "Stop the source safely",
+    tone: "blue",
+    steps: [
+      "Keep away from water near electrical outlets or appliances.",
+      "If safe, close the main water shutoff.",
+      "Move people and pets away from the affected area.",
+      "Call building management or an emergency plumber.",
+      "Photograph damage only when the area is safe.",
+    ],
+  },
+  outage: {
+    label: "Power outage",
+    eyebrow: "Check everyone first",
+    tone: "gold",
+    steps: [
+      "Check whether anyone relies on powered medical equipment.",
+      "Use a torch. Avoid candles and open flames.",
+      "Unplug sensitive electronics and keep the fridge closed.",
+      "Check the official utility channel when a connection is available.",
+      "Move to your backup location if safety or medical needs require it.",
+    ],
+  },
+  evacuation: {
+    label: "Evacuation",
+    eyebrow: "Leave early and calmly",
+    tone: "orange",
+    steps: [
+      "Follow official evacuation instructions immediately.",
+      "Take people, essential medication, keys, phones, and pets.",
+      "Use your planned route unless authorities direct otherwise.",
+      "Go to your primary meeting point and check in.",
+      "Do not return until authorities confirm it is safe.",
+    ],
+  },
+};
+
+const statusLabels = {
+  safe: "I’m safe",
+  help: "I need help",
+  moving: "I’m relocating",
+};
+
+export default function HomeClient() {
+  const [screen, setScreen] = useState<Screen>("home");
+  const [incident, setIncident] = useState<IncidentKey>("evacuation");
+  const [step, setStep] = useState(0);
+  const [status, setStatus] = useState<keyof typeof statusLabels>("safe");
+  const [contacts, setContacts] = useState<EmergencyContact[]>([]);
+  const [selectedContactId, setSelectedContactId] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactTypes, setContactTypes] = useState<IncidentKey[]>([]);
+  const [messageIncident, setMessageIncident] = useState<IncidentKey | null>(null);
+  const [location, setLocation] = useState<{
+    latitude: number;
+    longitude: number;
+    accuracy: number;
+  } | null>(null);
+  const [locationState, setLocationState] = useState<
+    "idle" | "loading" | "denied" | "ready"
+  >("idle");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    const savedContacts = window.localStorage.getItem("homesafe-contacts");
+    if (savedContacts) {
+      try {
+        const parsed = JSON.parse(savedContacts) as EmergencyContact[];
+        const migrated = parsed.map((contact) => ({
+          ...contact,
+          incidentTypes:
+            contact.incidentTypes?.length
+              ? contact.incidentTypes
+              : (Object.keys(incidents) as IncidentKey[]),
+        }));
+        setContacts(migrated);
+        setSelectedContactId(migrated[0]?.id ?? "");
+        window.localStorage.setItem("homesafe-contacts", JSON.stringify(migrated));
+      } catch {
+        window.localStorage.removeItem("homesafe-contacts");
+      }
+    } else {
+      const legacyPhone = window.localStorage.getItem("homesafe-contact");
+      if (legacyPhone) {
+        const migrated = [{
+          id: crypto.randomUUID(),
+          name: "Primary contact",
+          phone: legacyPhone,
+          incidentTypes: Object.keys(incidents) as IncidentKey[],
+        }];
+        setContacts(migrated);
+        setSelectedContactId(migrated[0].id);
+        window.localStorage.setItem("homesafe-contacts", JSON.stringify(migrated));
+        window.localStorage.removeItem("homesafe-contact");
+      }
+    }
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/homesafe/sw.js").catch(() => undefined);
+    }
+  }, []);
+
+  const begin = (key: IncidentKey) => {
+    setIncident(key);
+    setStep(0);
+    setScreen("guide");
+  };
+
+  const timestamp = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(new Date()),
+    [screen, location]
+  );
+
+  const message = useMemo(() => {
+    const detail =
+      status === "help"
+        ? "Please call me. If you cannot reach me, contact emergency services."
+        : status === "moving"
+          ? "I’m leaving now and heading to our meeting point."
+          : "No immediate help is needed.";
+    const position = location
+      ? ` My location: https://maps.google.com/?q=${location.latitude},${location.longitude} (accuracy about ${Math.round(location.accuracy)}m).`
+      : "";
+    return `HOMESAFE: ${statusLabels[status]}. ${detail}${position} Updated ${timestamp}.`;
+  }, [location, status, timestamp]);
+
+  const requestLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationState("denied");
+      return;
+    }
+    setLocationState("loading");
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setLocation({
+          latitude: Number(coords.latitude.toFixed(6)),
+          longitude: Number(coords.longitude.toFixed(6)),
+          accuracy: coords.accuracy,
+        });
+        setLocationState("ready");
+      },
+      () => setLocationState("denied"),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  };
+
+  const openSms = () => {
+    const matchingContacts = messageIncident
+      ? contacts.filter((contact) => contact.incidentTypes.includes(messageIncident))
+      : contacts;
+    const selectedContact =
+      matchingContacts.find((contact) => contact.id === selectedContactId) ??
+      matchingContacts[0];
+    if (!selectedContact) {
+      setScreen("contacts");
+      return;
+    }
+    const recipient = selectedContact.phone.replace(/[^\d+]/g, "");
+    window.location.href = `sms:${recipient}?body=${encodeURIComponent(message)}`;
+  };
+
+  const saveContact = () => {
+    const name = contactName.trim();
+    const phone = contactPhone.trim();
+    if (!name || !phone || !contactTypes.length) return;
+    const next = [...contacts, { id: crypto.randomUUID(), name, phone, incidentTypes: contactTypes }];
+    setContacts(next);
+    setSelectedContactId((current) => current || next[0].id);
+    window.localStorage.setItem("homesafe-contacts", JSON.stringify(next));
+    setContactName("");
+    setContactPhone("");
+    setContactTypes([]);
+  };
+
+  const removeContact = (id: string) => {
+    const next = contacts.filter((contact) => contact.id !== id);
+    setContacts(next);
+    if (selectedContactId === id) setSelectedContactId(next[0]?.id ?? "");
+    window.localStorage.setItem("homesafe-contacts", JSON.stringify(next));
+  };
+
+  const toggleContactType = (type: IncidentKey) => {
+    setContactTypes((current) =>
+      current.includes(type)
+        ? current.filter((item) => item !== type)
+        : [...current, type]
+    );
+  };
+
+  const matchingContacts = messageIncident
+    ? contacts.filter((contact) => contact.incidentTypes.includes(messageIncident))
+    : contacts;
+
+  useEffect(() => {
+    if (!matchingContacts.some((contact) => contact.id === selectedContactId)) {
+      setSelectedContactId(matchingContacts[0]?.id ?? "");
+    }
+  }, [matchingContacts, selectedContactId]);
+
+  const copyMessage = async () => {
+    await navigator.clipboard.writeText(message);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1800);
+  };
+
+  return (
+    <main className={`app incident-${incidents[incident].tone}`}>
+      <header className="topbar">
+        <button className="brand" onClick={() => setScreen("home")} aria-label="HomeSafe home">
+          <span className="brand-mark">H</span>
+          <span>HomeSafe</span>
+        </button>
+        <span className="offline-pill"><i /> Ready offline</span>
+      </header>
+
+      {screen === "home" && (
+        <section className="home-screen">
+          <div className="calm-copy">
+            <p className="kicker">Your household emergency plan</p>
+            <h1>Know the next safe step.</h1>
+            <p className="lede">
+              Clear guidance, essential details, and a prepared check-in—even when
+              the internet is unreliable.
+            </p>
+          </div>
+
+          <button className="emergency-button" onClick={() => setScreen("choose")}>
+            <span className="pulse-ring" />
+            <strong>Emergency mode</strong>
+            <small>Tap to choose what’s happening</small>
+          </button>
+
+          <div className="quick-grid">
+            <button onClick={() => { setMessageIncident(null); setScreen("message"); }}>
+              <span className="quick-icon">↗</span>
+              <b>Send a check-in</b>
+              <small>Prepare SMS</small>
+            </button>
+            <button onClick={() => setScreen("plan")}>
+              <span className="quick-icon">⌂</span>
+              <b>Household plan</b>
+              <small>Contacts & meeting point</small>
+            </button>
+          </div>
+
+          <div className="readiness">
+            <div>
+              <span className="readiness-score">72%</span>
+              <span><b>Plan readiness</b><small>3 details still need attention</small></span>
+            </div>
+            <span className="arrow">→</span>
+          </div>
+        </section>
+      )}
+
+      {screen === "choose" && (
+        <section className="sheet">
+          <button className="back" onClick={() => setScreen("home")}>← Back</button>
+          <p className="kicker">Emergency mode</p>
+          <h2>What’s happening?</h2>
+          <p className="muted">Choose the closest situation. If anyone is in immediate danger, call your local emergency number.</p>
+          <div className="incident-list">
+            {(Object.keys(incidents) as IncidentKey[]).map((key) => (
+              <button key={key} onClick={() => begin(key)}>
+                <span className={`incident-dot ${incidents[key].tone}`} />
+                <span><b>{incidents[key].label}</b><small>{incidents[key].eyebrow}</small></span>
+                <span>→</span>
+              </button>
+            ))}
+          </div>
+          <a className="call-button" href="tel:">
+            <span>☎</span> Call emergency services
+          </a>
+        </section>
+      )}
+
+      {screen === "guide" && (
+        <section className="guide-screen">
+          <div className="guide-head">
+            <button className="back light" onClick={() => setScreen("choose")}>← Change emergency</button>
+            <p className="kicker">Step {step + 1} of {incidents[incident].steps.length}</p>
+            <h2>{incidents[incident].label}</h2>
+          </div>
+          <div className="action-card">
+            <span className="step-number">{step + 1}</span>
+            <p>{incidents[incident].steps[step]}</p>
+            <div className="progress">
+              {incidents[incident].steps.map((_, i) => <i key={i} className={i <= step ? "active" : ""} />)}
+            </div>
+          </div>
+          <div className="guide-actions">
+            {step < incidents[incident].steps.length - 1 ? (
+              <button className="primary" onClick={() => setStep(step + 1)}>Done — show next step</button>
+            ) : (
+              <button className="primary" onClick={() => { setMessageIncident(incident); setScreen("message"); }}>Check in with my contacts</button>
+            )}
+            {step > 0 && <button className="text-button" onClick={() => setStep(step - 1)}>Previous step</button>}
+          </div>
+          <p className="safety-note">HomeSafe supports your household plan. Always follow instructions from local authorities.</p>
+        </section>
+      )}
+
+      {screen === "message" && (
+        <section className="sheet message-sheet">
+          <button className="back" onClick={() => setScreen("home")}>← Back</button>
+          <p className="kicker">Prepared check-in</p>
+          <h2>Tell someone your status.</h2>
+          {messageIncident && (
+            <div className="incident-context">
+              <span className={`incident-dot ${incidents[messageIncident].tone}`} />
+              <span><small>Contacting for</small><b>{incidents[messageIncident].label}</b></span>
+            </div>
+          )}
+          <div className="segmented">
+            {(Object.keys(statusLabels) as Array<keyof typeof statusLabels>).map((key) => (
+              <button key={key} className={status === key ? "selected" : ""} onClick={() => setStatus(key)}>
+                {statusLabels[key]}
+              </button>
+            ))}
+          </div>
+          <div className="saved-recipients">
+            <span className="section-label">Send to saved contact</span>
+            {matchingContacts.length ? (
+              <div className="contact-picker">
+                {matchingContacts.map((contact) => (
+                  <button
+                    key={contact.id}
+                    className={selectedContactId === contact.id ? "selected" : ""}
+                    onClick={() => setSelectedContactId(contact.id)}
+                  >
+                    <i>{contact.name.slice(0, 1).toUpperCase()}</i>
+                    <span><b>{contact.name}</b><small>{contact.phone}</small></span>
+                    <em>{selectedContactId === contact.id ? "Selected" : "Choose"}</em>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <button className="empty-contact" onClick={() => setScreen("contacts")}>
+                <span>
+                  <b>{contacts.length && messageIncident ? `No contact assigned to ${incidents[messageIncident].label.toLowerCase()}` : "Add an emergency contact"}</b>
+                  <small>{contacts.length && messageIncident ? "Assign this emergency type to a saved contact." : "Save a number once, then use it during emergencies."}</small>
+                </span>
+                <i>→</i>
+              </button>
+            )}
+          </div>
+          <div className="location-card">
+            <div>
+              <b>{location ? "Current location included" : "Include your current location?"}</b>
+              <small>
+                {location
+                  ? `${location.latitude}, ${location.longitude} · ±${Math.round(location.accuracy)}m`
+                  : locationState === "denied"
+                    ? "Location unavailable. You can still send without it."
+                    : "Requested once and not stored by default."}
+              </small>
+            </div>
+            {!location && <button onClick={requestLocation} disabled={locationState === "loading"}>
+              {locationState === "loading" ? "Locating…" : "Add location"}
+            </button>}
+          </div>
+          <div className="message-preview">
+            <span>Message preview</span>
+            <p>{message}</p>
+          </div>
+          <button className="primary" onClick={openSms}>
+            {matchingContacts.length ? "Open in Messages" : "Add a matching contact first"}
+          </button>
+          <button className="secondary" onClick={copyMessage}>{copied ? "Copied" : "Copy message instead"}</button>
+          <p className="safety-note">Your messaging app will open. Review the recipient and message, then tap Send.</p>
+        </section>
+      )}
+
+      {screen === "plan" && (
+        <section className="sheet">
+          <button className="back" onClick={() => setScreen("home")}>← Back</button>
+          <p className="kicker">Household plan</p>
+          <h2>Your essentials, in one place.</h2>
+          <div className="plan-card highlight">
+            <span>Primary meeting point</span>
+            <b>Front gate, across the road</b>
+            <small>Stay together and do not re-enter the building.</small>
+          </div>
+          <div className="plan-list">
+            <button><span>◎</span><b>People & pets</b><small>3 people · 1 pet</small><i>→</i></button>
+            <button onClick={() => setScreen("contacts")}><span>☎</span><b>Emergency contacts</b><small>{contacts.length ? `${contacts.length} contact${contacts.length === 1 ? "" : "s"} saved` : "Add your first contact"}</small><i>→</i></button>
+            <button><span>⌁</span><b>Utility shutoffs</b><small>Water and electricity</small><i>→</i></button>
+            <button><span>✚</span><b>Medication & access needs</b><small>Review details</small><i>→</i></button>
+          </div>
+          <div className="offline-banner"><i /> Emergency plan available offline on this device</div>
+        </section>
+      )}
+
+      {screen === "contacts" && (
+        <section className="sheet contacts-sheet">
+          <button className="back" onClick={() => setScreen("plan")}>← Household plan</button>
+          <p className="kicker">Emergency contacts</p>
+          <h2>People you can reach quickly.</h2>
+          <p className="muted">Contacts stay on this device. The first saved contact is selected by default when you prepare an emergency SMS.</p>
+
+          <div className="contact-form">
+            <label className="field">
+              <span>Contact name</span>
+              <input value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="e.g. Alex" autoComplete="name" />
+            </label>
+            <label className="field">
+              <span>Phone number</span>
+              <input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} inputMode="tel" placeholder="+65 9123 4567" autoComplete="tel" />
+            </label>
+            <fieldset className="type-field">
+              <legend>Helps with</legend>
+              <div className="type-options">
+                {(Object.keys(incidents) as IncidentKey[]).map((type) => (
+                  <label key={type} className={contactTypes.includes(type) ? "selected" : ""}>
+                    <input
+                      type="checkbox"
+                      checked={contactTypes.includes(type)}
+                      onChange={() => toggleContactType(type)}
+                    />
+                    <span className={`incident-dot ${incidents[type].tone}`} />
+                    {incidents[type].label}
+                  </label>
+                ))}
+              </div>
+              <small>Select one or more emergency types.</small>
+            </fieldset>
+            <button className="primary" onClick={saveContact} disabled={!contactName.trim() || !contactPhone.trim() || !contactTypes.length}>Save emergency contact</button>
+          </div>
+
+          <div className="contact-book">
+            <span className="section-label">Saved contacts</span>
+            {contacts.length ? contacts.map((contact, index) => (
+              <div className="contact-row" key={contact.id}>
+                <i>{contact.name.slice(0, 1).toUpperCase()}</i>
+                <span>
+                  <b>{contact.name}</b>
+                  <small>{contact.phone}{index === 0 ? " · Primary" : ""}</small>
+                  <em className="type-badges">
+                    {contact.incidentTypes.map((type) => <span key={type}>{incidents[type].label}</span>)}
+                  </em>
+                </span>
+                <button onClick={() => removeContact(contact.id)} aria-label={`Remove ${contact.name}`}>Remove</button>
+              </div>
+            )) : <p className="empty-state">No emergency contacts saved yet.</p>}
+          </div>
+          <p className="safety-note">HomeSafe never sends a message automatically. You will always review it in your messaging app first.</p>
+        </section>
+      )}
+    </main>
+  );
+}
