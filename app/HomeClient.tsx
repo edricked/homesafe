@@ -155,8 +155,11 @@ export default function HomeClient() {
     const position = location
       ? ` My location: https://maps.google.com/?q=${location.latitude},${location.longitude} (accuracy about ${Math.round(location.accuracy)}m).`
       : "";
-    return `HOMESAFE: ${statusLabels[status]}. ${detail}${position} Updated ${timestamp}.`;
-  }, [location, status, timestamp]);
+    const emergency = messageIncident
+      ? ` Emergency: ${incidents[messageIncident].label}.`
+      : "";
+    return `HOMESAFE: ${statusLabels[status]}.${emergency} ${detail}${position} Updated ${timestamp}.`;
+  }, [location, messageIncident, status, timestamp]);
 
   const requestLocation = () => {
     if (!navigator.geolocation) {
@@ -224,12 +227,11 @@ export default function HomeClient() {
   const matchingContacts = messageIncident
     ? contacts.filter((contact) => contact.incidentTypes.includes(messageIncident))
     : contacts;
-
-  useEffect(() => {
-    if (!matchingContacts.some((contact) => contact.id === selectedContactId)) {
-      setSelectedContactId(matchingContacts[0]?.id ?? "");
-    }
-  }, [matchingContacts, selectedContactId]);
+  const activeSelectedContactId = matchingContacts.some(
+    (contact) => contact.id === selectedContactId
+  )
+    ? selectedContactId
+    : (matchingContacts[0]?.id ?? "");
 
   const copyMessage = async () => {
     await navigator.clipboard.writeText(message);
@@ -359,12 +361,12 @@ export default function HomeClient() {
                 {matchingContacts.map((contact) => (
                   <button
                     key={contact.id}
-                    className={selectedContactId === contact.id ? "selected" : ""}
+                    className={activeSelectedContactId === contact.id ? "selected" : ""}
                     onClick={() => setSelectedContactId(contact.id)}
                   >
                     <i>{contact.name.slice(0, 1).toUpperCase()}</i>
                     <span><b>{contact.name}</b><small>{contact.phone}</small></span>
-                    <em>{selectedContactId === contact.id ? "Selected" : "Choose"}</em>
+                    <em>{activeSelectedContactId === contact.id ? "Selected" : "Choose"}</em>
                   </button>
                 ))}
               </div>
