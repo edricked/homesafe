@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 type IncidentKey = "fire" | "water" | "outage" | "evacuation";
-type Screen = "home" | "choose" | "guide" | "message" | "plan";
+type Screen = "home" | "choose" | "guide" | "message" | "plan" | "contacts";
+type EmergencyContact = { id: string; name: string; phone: string };
 
 const incidents: Record<
   IncidentKey,
@@ -70,7 +71,10 @@ export default function Home() {
   const [incident, setIncident] = useState<IncidentKey>("evacuation");
   const [step, setStep] = useState(0);
   const [status, setStatus] = useState<keyof typeof statusLabels>("safe");
-  const [phone, setPhone] = useState("");
+  const [contacts, setContacts] = useState<EmergencyContact[]>([]);
+  const [selectedContactId, setSelectedContactId] = useState("");
+  const [contactName, setContactName] = useState("");
+  const [contactPhone, setContactPhone] = useState("");
   const [location, setLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -82,8 +86,25 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("homesafe-contact");
-    if (saved) setPhone(saved);
+    const savedContacts = window.localStorage.getItem("homesafe-contacts");
+    if (savedContacts) {
+      try {
+        const parsed = JSON.parse(savedContacts) as EmergencyContact[];
+        setContacts(parsed);
+        setSelectedContactId(parsed[0]?.id ?? "");
+      } catch {
+        window.localStorage.removeItem("homesafe-contacts");
+      }
+    } else {
+      const legacyPhone = window.localStorage.getItem("homesafe-contact");
+      if (legacyPhone) {
+        const migrated = [{ id: crypto.randomUUID(), name: "Primary contact", phone: legacyPhone }];
+        setContacts(migrated);
+        setSelectedContactId(migrated[0].id);
+        window.localStorage.setItem("homesafe-contacts", JSON.stringify(migrated));
+        window.localStorage.removeItem("homesafe-contact");
+      }
+    }
     if ("serviceWorker" in navigator) {
       navigator.serviceWorker.register("/sw.js").catch(() => undefined);
     }
@@ -138,9 +159,32 @@ export default function Home() {
   };
 
   const openSms = () => {
-    if (phone) window.localStorage.setItem("homesafe-contact", phone);
-    const recipient = phone.replace(/[^\d+]/g, "");
+    const selectedContact = contacts.find((contact) => contact.id === selectedContactId) ?? contacts[0];
+    if (!selectedContact) {
+      setScreen("contacts");
+      return;
+    }
+    const recipient = selectedContact.phone.replace(/[^\d+]/g, "");
     window.location.href = `sms:${recipient}?body=${encodeURIComponent(message)}`;
+  };
+
+  const saveContact = () => {
+    const name = contactName.trim();
+    const phone = contactPhone.trim();
+    if (!name || !phone) return;
+    const next = [...contacts, { id: crypto.randomUUID(), name, phone }];
+    setContacts(next);
+    setSelectedContactId((current) => current || next[0].id);
+    window.localStorage.setItem("homesafe-contacts", JSON.stringify(next));
+    setContactName("");
+    setContactPhone("");
+  };
+
+  const removeContact = (id: string) => {
+    const next = contacts.filter((contact) => contact.id !== id);
+    setContacts(next);
+    if (selectedContactId === id) setSelectedContactId(next[0]?.id ?? "");
+    window.localStorage.setItem("homesafe-contacts", JSON.stringify(next));
   };
 
   const copyMessage = async () => {
@@ -258,10 +302,29 @@ export default function Home() {
               </button>
             ))}
           </div>
-          <label className="field">
-            <span>Emergency contact number</span>
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="+65 9123 4567" />
-          </label>
+          <div className="saved-recipients">
+            <span className="section-label">Send to saved contact</span>
+            {contacts.length ? (
+              <div className="contact-picker">
+                {contacts.map((contact) => (
+                  <button
+                    key={contact.id}
+                    className={selectedContactId === contact.id ? "selected" : ""}
+                    onClick={() => setSelectedContactId(contact.id)}
+                  >
+                    <i>{contact.name.slice(0, 1).toUpperCase()}</i>
+                    <span><b>{contact.name}</b><small>{contact.phone}</small></span>
+                    <em>{selectedContactId === contact.id ? "Selected" : "Choose"}</em>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <button className="empty-contact" onClick={() => setScreen("contacts")}>
+                <span><b>Add an emergency contact</b><small>Save a number once, then use it during emergencies.</small></span>
+                <i>→</i>
+              </button>
+            )}
+          </div>
           <div className="location-card">
             <div>
               <b>{location ? "Current location included" : "Include your current location?"}</b>
@@ -281,7 +344,9 @@ export default function Home() {
             <span>Message preview</span>
             <p>{message}</p>
           </div>
-          <button className="primary" onClick={openSms}>Open in Messages</button>
+          <button className="primary" onClick={openSms}>
+            {contacts.length ? "Open in Messages" : "Add a contact first"}
+          </button>
           <button className="secondary" onClick={copyMessage}>{copied ? "Copied" : "Copy message instead"}</button>
           <p className="safety-note">Your messaging app will open. Review the recipient and message, then tap Send.</p>
         </section>
@@ -299,11 +364,44 @@ export default function Home() {
           </div>
           <div className="plan-list">
             <button><span>◎</span><b>People & pets</b><small>3 people · 1 pet</small><i>→</i></button>
-            <button><span>☎</span><b>Emergency contacts</b><small>2 contacts saved</small><i>→</i></button>
+            <button onClick={() => setScreen("contacts")}><span>☎</span><b>Emergency contacts</b><small>{contacts.length ? `${contacts.length} contact${contacts.length === 1 ? "" : "s"} saved` : "Add your first contact"}</small><i>→</i></button>
             <button><span>⌁</span><b>Utility shutoffs</b><small>Water and electricity</small><i>→</i></button>
             <button><span>✚</span><b>Medication & access needs</b><small>Review details</small><i>→</i></button>
           </div>
           <div className="offline-banner"><i /> Emergency plan available offline on this device</div>
+        </section>
+      )}
+
+      {screen === "contacts" && (
+        <section className="sheet contacts-sheet">
+          <button className="back" onClick={() => setScreen("plan")}>← Household plan</button>
+          <p className="kicker">Emergency contacts</p>
+          <h2>People you can reach quickly.</h2>
+          <p className="muted">Contacts stay on this device. The first saved contact is selected by default when you prepare an emergency SMS.</p>
+
+          <div className="contact-form">
+            <label className="field">
+              <span>Contact name</span>
+              <input value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="e.g. Alex" autoComplete="name" />
+            </label>
+            <label className="field">
+              <span>Phone number</span>
+              <input value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} inputMode="tel" placeholder="+65 9123 4567" autoComplete="tel" />
+            </label>
+            <button className="primary" onClick={saveContact} disabled={!contactName.trim() || !contactPhone.trim()}>Save emergency contact</button>
+          </div>
+
+          <div className="contact-book">
+            <span className="section-label">Saved contacts</span>
+            {contacts.length ? contacts.map((contact, index) => (
+              <div className="contact-row" key={contact.id}>
+                <i>{contact.name.slice(0, 1).toUpperCase()}</i>
+                <span><b>{contact.name}</b><small>{contact.phone}{index === 0 ? " · Primary" : ""}</small></span>
+                <button onClick={() => removeContact(contact.id)} aria-label={`Remove ${contact.name}`}>Remove</button>
+              </div>
+            )) : <p className="empty-state">No emergency contacts saved yet.</p>}
+          </div>
+          <p className="safety-note">HomeSafe never sends a message automatically. You will always review it in your messaging app first.</p>
         </section>
       )}
     </main>
